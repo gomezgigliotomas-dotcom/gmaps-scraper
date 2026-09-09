@@ -2,7 +2,7 @@
 
 Scraper profesional de Google Maps para encontrar negocios potenciales para una agencia de Google Ads. Exporta los datos a CSV listo para importar en Google Sheets.
 
-**Versión 2.3** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
+**Versión 2.3.1** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
 
 ## Qué extrae
 
@@ -11,7 +11,7 @@ Scraper profesional de Google Maps para encontrar negocios potenciales para una 
 | `nombre` | Nombre del negocio |
 | `categoria` | Tipo de negocio según Google Maps |
 | `rating` | Puntuación (1–5) |
-| `cantidad_reviews` | Número de reseñas |
+| `cantidad_reviews` | Número de reseñas (puede venir vacío — ver nota abajo) |
 | `direccion` | Dirección completa |
 | `telefono` | Teléfono de contacto |
 | `sitio_web` | URL del sitio web (vacío = sin presencia digital) |
@@ -247,6 +247,16 @@ docker compose run --rm scraper --query "dentistas" --location "Buenos Aires" -o
 
 > **Nota:** no se puede correr con `--show-browser` dentro del contenedor (no hay entorno gráfico) — usá esa opción solo para debugging local.
 
+## 🐛 v2.3.1 — Fixes de corridas reales contra Google Maps
+
+Todo lo de v2.3 se probó corriendo el scraper contra Google Maps real (no solo con mocks), lo que reveló varios bugs que no aparecían en los tests unitarios:
+
+- **El primer resultado del feed se perdía siempre.** El selector de items matcheaba por error el carrusel de filtros de Google ("Horario", "Rating", etc.), que casualmente comparte estructura con un resultado real. Ahora el selector filtra explícitamente por `role="article"`, que es como Google marca cada negocio.
+- **`cantidad_reviews` a veces mostraba el mismo valor que `rating`.** El selector tomaba por error el aria-label de las "estrellas visuales" (`"4.9 estrellas"`) como si fuera un conteo de reseñas. Ahora se descarta explícitamente y el campo queda vacío si Google no expone el conteo real (ver Troubleshooting).
+- **`direccion`, `telefono` y `horario_estado` traían íconos de fuente pegados al texto** (caracteres invisibles + saltos de línea al principio/final). Se limpia el texto y se prefiere el `aria-label` del elemento (más estable) sobre su texto visible.
+- **Los logs de `scraper.py`, `retry.py`, etc. no se mostraban** — quedaban en un logger sin conectar al configurado por `--log-level`/`--log-file`. Se corrigió la jerarquía de logging.
+- **`--resume` podía duplicar negocios** si el orden de resultados de Google cambiaba levemente entre la corrida original y la retomada. Ahora se deduplica por nombre + dirección.
+
 ## Tips para agencias de Google Ads
 
 - **Sin sitio web** (`sitio_web` vacío) → prospectos que necesitan presencia digital primero
@@ -334,6 +344,9 @@ pytest -v
 - Google Maps actualiza sus clases CSS ocasionalmente
 - Abre un issue en GitHub si los selectores dejan de funcionar
 - Puedes debuggear con `--log-level DEBUG`
+
+### `cantidad_reviews` viene vacío
+- Es esperado en muchos casos: Google Maps no siempre expone el conteo de reseñas en el panel rápido de detalle (solo muestra el rating con estrellas). El scraper deja el campo vacío en vez de inventar un valor — no es un bug, es un dato que Google no está mostrando en ese momento/negocio.
 
 ### El scraping se cortó a mitad de camino
 - Volvé a correr el mismo comando (misma query/location/max) agregando `--resume`

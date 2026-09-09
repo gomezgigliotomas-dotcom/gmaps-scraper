@@ -3,7 +3,7 @@ Google Maps Business Scraper
 Módulo para extraer leads de Google Maps para agencias de Google Ads.
 """
 
-__version__ = "2.3.0"
+__version__ = "2.3.1"
 __author__ = "Tomás Goez Giglio"
 __description__ = (
     "Scraper profesional de Google Maps con logging, retry, config, "

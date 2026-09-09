@@ -19,6 +19,11 @@ from .state import get_state_path, load_state, save_state, clear_state
 logger = logging.getLogger(__name__)
 
 
+def _dedup_key(data: Dict[str, str]) -> tuple:
+    """Clave de deduplicación: nombre + dirección, normalizados."""
+    return (data.get("nombre", "").strip().lower(), data.get("direccion", "").strip().lower())
+
+
 async def scroll_results(page: Page, max_results: int, selectors: Dict[str, str], timeouts: Dict[str, int]) -> None:
     """
     Scrollea la lista de resultados para cargar más items.
@@ -78,6 +83,11 @@ async def _extract_item_with_retry(
     """Click en un item y extrae sus datos, con reintentos ante fallos temporales."""
 
     async def _attempt() -> Dict[str, str]:
+        # El primer resultado del feed suele quedar tapado por la barra de
+        # filtros de Google Maps (Horario, Rating, etc.) y Playwright lo
+        # considera "no visible" para el click hasta que se lo trae a la
+        # vista explícitamente.
+        await item.scroll_into_view_if_needed()
         await item.click()
         await page.wait_for_timeout(timeouts["item_click_wait_ms"])
         try:
@@ -147,6 +157,12 @@ async def scrape(
     results: List[Dict[str, str]] = list(previous_state["results"]) if previous_state else []
     already_processed = previous_state["processed_count"] if previous_state else 0
 
+    # Google Maps no garantiza el mismo orden de resultados entre cargas de
+    # página distintas — al retomar con --resume, el negocio que ahora cae
+    # en la posición N puede no ser el mismo que se guardó ahí la vez
+    # anterior. Se deduplica por (nombre, dirección) para no repetirlo.
+    seen_keys = {_dedup_key(r) for r in results}
+
     logger.info(f"Iniciando scraping: {search_term}")
     logger.info(f"Máximo de resultados: {max_results}")
     if already_processed:
@@ -215,12 +231,20 @@ async def scrape(
                     data = await _extract_item_with_retry(
                         page, item, selectors, timeouts, retry_cfg
                     )
-                    results.append(data)
-                    has_website = "🌐" if data["sitio_web"] else "📵"
-                    logger.info(
-                        f"[{i+1}/{total}] {has_website} {data['nombre']} "
-                        f"— {data['categoria']}"
-                    )
+                    key = _dedup_key(data)
+                    if key in seen_keys:
+                        logger.debug(
+                            f"[{i+1}/{total}] Duplicado (ya extraído en una corrida "
+                            f"previa de --resume), se omite: {data['nombre']}"
+                        )
+                    else:
+                        seen_keys.add(key)
+                        results.append(data)
+                        has_website = "🌐" if data["sitio_web"] else "📵"
+                        logger.info(
+                            f"[{i+1}/{total}] {has_website} {data['nombre']} "
+                            f"— {data['categoria']}"
+                        )
                 except Exception as e:
                     logger.error(
                         f"[{i+1}/{total}] Descartado tras reintentos: {e}",

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .scraper import scrape
-from .logger import setup_logger
+from .logger import setup_logger, PACKAGE_LOGGER_NAME
 from .config import ConfigError
 from .proxy import select_proxy, ProxyError
 from .batch import (
@@ -280,7 +280,7 @@ def main() -> None:
     # Configurar logging
     log_level = getattr(logging, args.log_level.upper())
     logger = setup_logger(
-        name="gmaps_scraper",
+        name=PACKAGE_LOGGER_NAME,
         log_level=log_level,
         log_file=args.log_file if args.log_file else None,
     )

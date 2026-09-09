@@ -1,7 +1,7 @@
 {
   "selectors": {
     "results_list": "div[role=\"feed\"]",
-    "result_item": "div[role=\"feed\"] > div > div[jsaction]",
+    "result_item": "div[role=\"feed\"] > div > div[role=\"article\"]",
     "business_name": "h1[class*=\"DUwDvf\"]",
     "rating": "div[class*=\"F7nice\"] span[aria-hidden=\"true\"]",
     "reviews_count": "div[class*=\"F7nice\"] span[aria-label]",

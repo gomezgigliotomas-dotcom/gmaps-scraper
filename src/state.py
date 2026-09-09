@@ -34,27 +34,32 @@ def get_state_path(
     return state_dir / f"{_run_id(query, location, max_results)}.json"
 
 
+def _read_state_file(state_path: Path) -> Optional[Dict[str, Any]]:
+    """Lee el JSON de estado sin loguear (uso interno). None si no existe/corrupto."""
+    if not state_path.exists():
+        return None
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"No se pudo leer el estado previo ({state_path}): {e}")
+        return None
+
+
 def load_state(state_path: Path) -> Optional[Dict[str, Any]]:
     """
-    Carga el estado guardado, si existe.
+    Carga el estado guardado para retomar un scraping con --resume.
 
     Returns:
         Dict con el estado, o None si no hay estado previo o está corrupto
     """
-    if not state_path.exists():
-        return None
-
-    try:
-        with open(state_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
+    state = _read_state_file(state_path)
+    if state is not None:
         logger.info(
             f"📂 Estado previo encontrado: {len(state.get('results', []))} "
             f"resultados ya extraídos ({state_path.name})"
         )
-        return state
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"No se pudo leer el estado previo ({state_path}): {e}")
-        return None
+    return state
 
 
 def save_state(
@@ -69,7 +74,10 @@ def save_state(
     """Guarda el estado actual del scraping (llamar incrementalmente)."""
     state_path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing = load_state(state_path) if state_path.exists() else None
+    # Lectura silenciosa: esto es un detalle interno (preservar created_at
+    # entre escrituras sucesivas), no un "estado previo encontrado" para
+    # el usuario — ese mensaje es exclusivo de load_state()/--resume.
+    existing = _read_state_file(state_path)
     created_at = existing["created_at"] if existing else datetime.now().isoformat()
 
     state = {
