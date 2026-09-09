@@ -1,29 +1,16 @@
 """
 Módulo para extraer datos de elementos en Google Maps.
 Separa la lógica de extracción del flujo principal.
+Los selectores CSS se reciben desde config (ver src/config.py).
 """
 
 import re
 import logging
-from typing import Dict, Optional
+from typing import Dict
 from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
 
-
-# Selectores CSS con documentación clara
-SELECTORS = {
-    "results_list": 'div[role="feed"]',
-    "result_item": 'div[role="feed"] > div > div[jsaction]',
-    "business_name": 'h1[class*="DUwDvf"]',
-    "rating": 'div[class*="F7nice"] span[aria-hidden="true"]',
-    "reviews_count": 'div[class*="F7nice"] span[aria-label]',
-    "category": 'button[jsaction*="category"]',
-    "address": 'button[data-item-id="address"]',
-    "phone": 'button[data-item-id*="phone"]',
-    "website": 'a[data-item-id="authority"]',
-    "open_status": 'div[class*="o0Svhf"]',
-}
 
 FIELDNAMES = [
     "nombre",
@@ -37,12 +24,13 @@ FIELDNAMES = [
 ]
 
 
-async def extract_business_data(page: Page) -> Dict[str, str]:
+async def extract_business_data(page: Page, selectors: Dict[str, str]) -> Dict[str, str]:
     """
     Extrae datos de un negocio desde la página abierta de Google Maps.
 
     Args:
         page: Página de Playwright
+        selectors: Diccionario de selectores CSS (desde config)
 
     Returns:
         Diccionario con datos del negocio
@@ -51,7 +39,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Nombre del negocio
     try:
-        el = await page.query_selector(SELECTORS["business_name"])
+        el = await page.query_selector(selectors["business_name"])
         if el:
             data["nombre"] = (await el.inner_text()).strip()
     except Exception as e:
@@ -59,7 +47,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Rating
     try:
-        el = await page.query_selector(SELECTORS["rating"])
+        el = await page.query_selector(selectors["rating"])
         if el:
             data["rating"] = (await el.inner_text()).strip()
     except Exception as e:
@@ -67,7 +55,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Cantidad de reviews
     try:
-        el = await page.query_selector(SELECTORS["reviews_count"])
+        el = await page.query_selector(selectors["reviews_count"])
         if el:
             aria = await el.get_attribute("aria-label") or ""
             numbers = re.findall(r"[\d,\.]+", aria)
@@ -78,7 +66,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Categoría
     try:
-        el = await page.query_selector(SELECTORS["category"])
+        el = await page.query_selector(selectors["category"])
         if el:
             data["categoria"] = (await el.inner_text()).strip()
     except Exception as e:
@@ -86,7 +74,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Dirección
     try:
-        el = await page.query_selector(SELECTORS["address"])
+        el = await page.query_selector(selectors["address"])
         if el:
             data["direccion"] = (await el.inner_text()).strip()
     except Exception as e:
@@ -94,7 +82,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Teléfono
     try:
-        el = await page.query_selector(SELECTORS["phone"])
+        el = await page.query_selector(selectors["phone"])
         if el:
             data["telefono"] = (await el.inner_text()).strip()
     except Exception as e:
@@ -102,7 +90,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Sitio web
     try:
-        el = await page.query_selector(SELECTORS["website"])
+        el = await page.query_selector(selectors["website"])
         if el:
             data["sitio_web"] = await el.get_attribute("href") or ""
     except Exception as e:
@@ -110,7 +98,7 @@ async def extract_business_data(page: Page) -> Dict[str, str]:
 
     # Estado (Abierto/Cerrado)
     try:
-        el = await page.query_selector(SELECTORS["open_status"])
+        el = await page.query_selector(selectors["open_status"])
         if el:
             data["horario_estado"] = (await el.inner_text()).strip()
     except Exception as e:

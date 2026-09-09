@@ -1,0 +1,40 @@
+{
+  "selectors": {
+    "results_list": "div[role=\"feed\"]",
+    "result_item": "div[role=\"feed\"] > div > div[jsaction]",
+    "business_name": "h1[class*=\"DUwDvf\"]",
+    "rating": "div[class*=\"F7nice\"] span[aria-hidden=\"true\"]",
+    "reviews_count": "div[class*=\"F7nice\"] span[aria-label]",
+    "category": "button[jsaction*=\"category\"]",
+    "address": "button[data-item-id=\"address\"]",
+    "phone": "button[data-item-id*=\"phone\"]",
+    "website": "a[data-item-id=\"authority\"]",
+    "open_status": "div[class*=\"o0Svhf\"]",
+    "end_of_results": "span[class*=\"HlvSq\"]",
+    "cookie_accept_aria": "button[aria-label*=\"Aceptar\"]",
+    "cookie_accept_text": "button:has-text(\"Accept\")"
+  },
+  "timeouts": {
+    "page_load_ms": 2000,
+    "cookie_accept_ms": 1000,
+    "results_panel_ms": 10000,
+    "scroll_wait_ms": 800,
+    "item_click_wait_ms": 1500,
+    "detail_panel_ms": 5000
+  },
+  "retry": {
+    "max_attempts": 3,
+    "base_delay_seconds": 1.0,
+    "max_delay_seconds": 8.0,
+    "exponential_base": 2.0
+  },
+  "defaults": {
+    "max_results": 50,
+    "hard_max_results": 120,
+    "locale": "es-AR",
+    "viewport": {
+      "width": 1280,
+      "height": 900
+    }
+  }
+}

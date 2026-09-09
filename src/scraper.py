@@ -3,32 +3,32 @@ Google Maps Business Scraper - Módulo principal de scraping.
 Contiene la lógica de navegación y scroll en Google Maps.
 """
 
-import asyncio
+import csv
 import logging
-from typing import List, Dict
+from typing import List, Dict, Any
 from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from playwright.async_api import Page
 
 from .extractors import extract_business_data, FIELDNAMES
+from .retry import retry_async
+from .config import load_config
 
 logger = logging.getLogger(__name__)
 
 
-async def scroll_results(page: Page, max_results: int) -> None:
+async def scroll_results(page: Page, max_results: int, selectors: Dict[str, str], timeouts: Dict[str, int]) -> None:
     """
     Scrollea la lista de resultados para cargar más items.
 
     Args:
         page: Página de Playwright
         max_results: Máximo número de resultados a cargar
+        selectors: Selectores CSS desde config
+        timeouts: Timeouts en ms desde config
     """
-    results_list_selector = 'div[role="feed"]'
-    result_item_selector = 'div[role="feed"] > div > div[jsaction]'
-    end_message_selector = 'span[class*="HlvSq"]'
-
-    feed = await page.query_selector(results_list_selector)
+    feed = await page.query_selector(selectors["results_list"])
     if not feed:
         logger.warning("No se encontró el panel de resultados")
         return
@@ -37,7 +37,7 @@ async def scroll_results(page: Page, max_results: int) -> None:
     stall_count = 0
 
     while True:
-        items = await page.query_selector_all(result_item_selector)
+        items = await page.query_selector_all(selectors["result_item"])
         current_count = len(items)
 
         if current_count >= max_results:
@@ -58,13 +58,49 @@ async def scroll_results(page: Page, max_results: int) -> None:
 
         # Scroll hacia abajo
         await feed.evaluate("el => el.scrollBy(0, 1000)")
-        await page.wait_for_timeout(800)
+        await page.wait_for_timeout(timeouts["scroll_wait_ms"])
 
         # Verificar si alcanzamos el final
-        end_msg = await page.query_selector(end_message_selector)
+        end_msg = await page.query_selector(selectors["end_of_results"])
         if end_msg:
             logger.info("Se alcanzó el final de los resultados")
             break
+
+
+async def _extract_item_with_retry(
+    page: Page,
+    item: Any,
+    selectors: Dict[str, str],
+    timeouts: Dict[str, int],
+    retry_cfg: Dict[str, float],
+) -> Dict[str, str]:
+    """Click en un item y extrae sus datos, con reintentos ante fallos temporales."""
+
+    async def _attempt() -> Dict[str, str]:
+        await item.click()
+        await page.wait_for_timeout(timeouts["item_click_wait_ms"])
+        try:
+            await page.wait_for_selector(
+                selectors["business_name"], timeout=timeouts["detail_panel_ms"]
+            )
+        except PlaywrightTimeout:
+            # No es fatal: puede que el negocio no tenga ese selector exacto.
+            # extract_business_data devuelve "" para nombre y se descarta arriba.
+            pass
+
+        data = await extract_business_data(page, selectors)
+        if not data["nombre"]:
+            raise RuntimeError("No se pudo extraer el nombre del negocio")
+        return data
+
+    return await retry_async(
+        _attempt,
+        max_attempts=retry_cfg["max_attempts"],
+        base_delay=retry_cfg["base_delay_seconds"],
+        max_delay=retry_cfg["max_delay_seconds"],
+        exponential_base=retry_cfg["exponential_base"],
+        operation_name="extracción de item",
+    )
 
 
 async def scrape(
@@ -73,6 +109,7 @@ async def scrape(
     max_results: int,
     output_file: str,
     headless: bool,
+    config_path: str = "",
 ) -> List[Dict[str, str]]:
     """
     Realiza el scraping de negocios en Google Maps.
@@ -83,10 +120,17 @@ async def scrape(
         max_results: Máximo de resultados a extraer
         output_file: Path del archivo CSV de salida
         headless: Si True, ejecuta sin mostrar navegador
+        config_path: Path a config JSON alternativo (opcional)
 
     Returns:
         Lista de diccionarios con datos de negocios
     """
+    config = load_config(config_path)
+    selectors = config["selectors"]
+    timeouts = config["timeouts"]
+    retry_cfg = config["retry"]
+    defaults = config["defaults"]
+
     search_term = f"{query} en {location}"
     results: List[Dict[str, str]] = []
 
@@ -97,8 +141,8 @@ async def scrape(
         try:
             browser = await p.chromium.launch(headless=headless)
             context = await browser.new_context(
-                locale="es-AR",
-                viewport={"width": 1280, "height": 900},
+                locale=defaults["locale"],
+                viewport=defaults["viewport"],
             )
             page = await context.new_page()
 
@@ -106,64 +150,56 @@ async def scrape(
             maps_url = f"https://www.google.com/maps/search/{search_term.replace(' ', '+')}"
             logger.info(f"Navegando a: {maps_url}")
             await page.goto(maps_url, wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(timeouts["page_load_ms"])
 
             # Aceptar cookies/términos
             try:
-                accept_btn = await page.query_selector('button[aria-label*="Aceptar"]')
+                accept_btn = await page.query_selector(selectors["cookie_accept_aria"])
                 if not accept_btn:
-                    accept_btn = await page.query_selector('button:has-text("Accept")')
+                    accept_btn = await page.query_selector(selectors["cookie_accept_text"])
                 if accept_btn:
                     await accept_btn.click()
                     logger.debug("Cookies aceptadas")
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(timeouts["cookie_accept_ms"])
             except Exception as e:
                 logger.debug(f"No se pudo aceptar cookies: {e}")
 
             # Esperar a que carguen los resultados
             logger.info("Esperando carga de resultados...")
             try:
-                await page.wait_for_selector('div[role="feed"]', timeout=10000)
+                await page.wait_for_selector(
+                    selectors["results_list"], timeout=timeouts["results_panel_ms"]
+                )
             except PlaywrightTimeout:
                 logger.error("Timeout esperando resultados. La búsqueda puede no ser válida.")
                 await browser.close()
                 return []
 
             # Scrollear para cargar más resultados
-            await scroll_results(page, max_results)
+            await scroll_results(page, max_results, selectors, timeouts)
 
             # Obtener items cargados
-            items = await page.query_selector_all('div[role="feed"] > div > div[jsaction]')
+            items = await page.query_selector_all(selectors["result_item"])
             total = min(len(items), max_results)
             logger.info(f"Encontrados {len(items)} negocios. Extrayendo {total}...")
 
-            # Extraer datos de cada item
+            # Extraer datos de cada item (con retry ante fallos temporales)
             for i, item in enumerate(items[:max_results]):
                 try:
-                    await item.click()
-                    await page.wait_for_timeout(1500)
-
-                    # Esperar a que cargue el panel de detalles
-                    try:
-                        await page.wait_for_selector('h1[class*="DUwDvf"]', timeout=5000)
-                    except PlaywrightTimeout:
-                        logger.debug(f"Timeout en detalles del item {i+1}")
-
-                    # Extraer datos
-                    data = await extract_business_data(page)
-
-                    if data["nombre"]:
-                        results.append(data)
-                        has_website = "🌐" if data["sitio_web"] else "📵"
-                        logger.info(
-                            f"[{i+1}/{total}] {has_website} {data['nombre']} "
-                            f"— {data['categoria']}"
-                        )
-                    else:
-                        logger.warning(f"[{i+1}/{total}] No se extrajeron datos válidos")
-
+                    data = await _extract_item_with_retry(
+                        page, item, selectors, timeouts, retry_cfg
+                    )
+                    results.append(data)
+                    has_website = "🌐" if data["sitio_web"] else "📵"
+                    logger.info(
+                        f"[{i+1}/{total}] {has_website} {data['nombre']} "
+                        f"— {data['categoria']}"
+                    )
                 except Exception as e:
-                    logger.error(f"[{i+1}/{total}] Error extrayendo item: {e}", exc_info=False)
+                    logger.error(
+                        f"[{i+1}/{total}] Descartado tras reintentos: {e}",
+                        exc_info=False,
+                    )
                     continue
 
             await browser.close()
@@ -181,9 +217,6 @@ async def scrape(
     try:
         Path(output_file).parent.mkdir(parents=True, exist_ok=True)
         logger.info(f"Guardando {len(results)} resultados en {output_file}")
-
-        # Importar CSV aquí para evitar dependencias circulares
-        import csv
 
         with open(output_file, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
