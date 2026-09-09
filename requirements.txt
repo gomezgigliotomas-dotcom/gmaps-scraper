@@ -1,1 +1,2 @@
+# Dependencias de producción
 playwright>=1.40.0
