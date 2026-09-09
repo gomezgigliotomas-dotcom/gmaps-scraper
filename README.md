@@ -2,7 +2,7 @@
 
 Scraper profesional de Google Maps para encontrar negocios potenciales para una agencia de Google Ads. Exporta los datos a CSV listo para importar en Google Sheets.
 
-**Versión 2.3.1** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
+**Versión 2.3.2** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
 
 ## Qué extrae
 
@@ -256,6 +256,14 @@ Todo lo de v2.3 se probó corriendo el scraper contra Google Maps real (no solo 
 - **`direccion`, `telefono` y `horario_estado` traían íconos de fuente pegados al texto** (caracteres invisibles + saltos de línea al principio/final). Se limpia el texto y se prefiere el `aria-label` del elemento (más estable) sobre su texto visible.
 - **Los logs de `scraper.py`, `retry.py`, etc. no se mostraban** — quedaban en un logger sin conectar al configurado por `--log-level`/`--log-file`. Se corrigió la jerarquía de logging.
 - **`--resume` podía duplicar negocios** si el orden de resultados de Google cambiaba levemente entre la corrida original y la retomada. Ahora se deduplica por nombre + dirección.
+
+### v2.3.2 — Fix de build de Docker
+
+Probé el `docker build` + `docker run` + `docker compose run` de punta a punta (ya no solo revisado a mano) y encontré un bug real: `requirements.txt` no fijaba la versión de `playwright`, así que `pip install` traía la última versión disponible — pero la imagen base del `Dockerfile` trae Chromium preinstalado para una versión puntual. El mismatch hacía que el contenedor fallara al lanzar el browser (`Executable doesn't exist`).
+
+**Fix:** `playwright==1.62.0` fijado en `requirements.txt`, coincidiendo exactamente con el tag de la imagen base (`v1.62.0-jammy`) en el `Dockerfile`. Si en el futuro actualizás una versión, hay que actualizar la otra — queda documentado con un comentario en ambos archivos.
+
+Verificado con una búsqueda real dentro del contenedor (`docker run` y `docker compose run`), con el volumen de `output/` accesible desde el host.
 
 ## Tips para agencias de Google Ads
 

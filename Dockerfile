@@ -1,6 +1,12 @@
 # Imagen oficial de Playwright con Python y navegadores preinstalados
-# (evita tener que instalar Chromium + dependencias del sistema a mano)
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+# (evita tener que instalar Chromium + dependencias del sistema a mano).
+#
+# El tag de version DEBE coincidir exactamente con la version de
+# "playwright" fijada en requirements.txt — el binario de Chromium que
+# trae esta imagen es especifico de esa version. Si se actualiza una,
+# hay que actualizar la otra (si no, el build funciona pero el contenedor
+# falla al lanzar el browser con "Executable doesn't exist").
+FROM mcr.microsoft.com/playwright/python:v1.62.0-jammy
 
 WORKDIR /app
 
