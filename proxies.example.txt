@@ -1,0 +1,16 @@
+# Lista de proxies para rotación (uno por línea).
+# Copiá este archivo a "proxies.txt" y completá con tus proxies reales.
+# proxies.txt está en .gitignore — nunca se sube al repo.
+#
+# Formatos aceptados:
+#   host:port
+#   user:pass@host:port
+#   http://host:port
+#   http://user:pass@host:port
+#   socks5://host:port
+#
+# El scraper elige uno al azar en cada corrida con --proxy-file proxies.txt
+
+# 45.32.10.20:8080
+# user123:pass456@45.32.10.21:8080
+# http://45.32.10.22:8080

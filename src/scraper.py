@@ -5,7 +5,7 @@ Contiene la lógica de navegación y scroll en Google Maps.
 
 import csv
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
@@ -110,6 +110,7 @@ async def scrape(
     output_file: str,
     headless: bool,
     config_path: str = "",
+    proxy: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, str]]:
     """
     Realiza el scraping de negocios en Google Maps.
@@ -121,6 +122,9 @@ async def scrape(
         output_file: Path del archivo CSV de salida
         headless: Si True, ejecuta sin mostrar navegador
         config_path: Path a config JSON alternativo (opcional)
+        proxy: Dict en formato Playwright ({"server": ..., "username": ...,
+               "password": ...}) para rutear el tráfico a través de un
+               proxy y evitar bloqueos por IP. Ver src/proxy.py.
 
     Returns:
         Lista de diccionarios con datos de negocios
@@ -139,7 +143,12 @@ async def scrape(
 
     async with async_playwright() as p:
         try:
-            browser = await p.chromium.launch(headless=headless)
+            launch_kwargs: Dict[str, Any] = {"headless": headless}
+            if proxy:
+                launch_kwargs["proxy"] = proxy
+                logger.info("🌐 Navegador lanzado a través de proxy")
+
+            browser = await p.chromium.launch(**launch_kwargs)
             context = await browser.new_context(
                 locale=defaults["locale"],
                 viewport=defaults["viewport"],

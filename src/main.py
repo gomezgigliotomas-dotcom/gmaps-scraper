@@ -13,6 +13,7 @@ from pathlib import Path
 from .scraper import scrape
 from .logger import setup_logger
 from .config import ConfigError
+from .proxy import select_proxy, ProxyError
 
 # Caracteres de control y separadores de path que no deben aparecer en query/location
 _INVALID_CHARS_PATTERN = re.compile(r"[\x00-\x1f\x7f/\\]")
@@ -142,6 +143,23 @@ def main() -> None:
         default="",
         help="Path a config JSON alternativo (default: config/default.json)",
     )
+    parser.add_argument(
+        "--proxy",
+        default="",
+        help=(
+            "Proxy fijo para evitar bloqueos de IP "
+            '(ej: "http://user:pass@host:port" o "host:port"). '
+            "Mutuamente excluyente con --proxy-file."
+        ),
+    )
+    parser.add_argument(
+        "--proxy-file",
+        default="",
+        help=(
+            "Archivo con lista de proxies (uno por línea); se elige uno "
+            "al azar en cada corrida. Mutuamente excluyente con --proxy."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -164,6 +182,10 @@ def main() -> None:
         validate_max_results(args.max, logger)
         output = validate_output_path(args.output)
         config_path = validate_config_path(args.config)
+        proxy = select_proxy(
+            proxy=args.proxy or None,
+            proxy_file=args.proxy_file or None,
+        )
 
         # Generar nombre de archivo si no se especifica
         output_file = output or generate_output_filename(query, location)
@@ -172,6 +194,8 @@ def main() -> None:
         logger.info(f"📍 Ubicación: {location}")
         logger.info(f"📊 Máximo de resultados: {args.max}")
         logger.info(f"💾 Archivo de salida: {output_file}")
+        if not proxy:
+            logger.info("🌐 Sin proxy — conexión directa (mayor riesgo de bloqueo/CAPTCHA)")
 
         # Ejecutar scraping
         headless = not args.show_browser
@@ -183,6 +207,7 @@ def main() -> None:
                 output_file=output_file,
                 headless=headless,
                 config_path=config_path,
+                proxy=proxy,
             )
         )
 
@@ -193,7 +218,7 @@ def main() -> None:
         else:
             logger.warning("⚠️  No se extrajeron resultados")
 
-    except (ValueError, ConfigError) as e:
+    except (ValueError, ConfigError, ProxyError) as e:
         logger.error(f"❌ Error de validación: {e}")
         exit(1)
     except KeyboardInterrupt:
