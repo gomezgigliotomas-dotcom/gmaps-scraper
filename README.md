@@ -2,7 +2,7 @@
 
 Scraper profesional de Google Maps para encontrar negocios potenciales para una agencia de Google Ads. Exporta los datos a CSV listo para importar en Google Sheets.
 
-**Versión 2.0** ✨ - Refactorizado con logging profesional, type hints y mejor estructura.
+**Versión 2.1** ✨ - Logging profesional, type hints, retry automático, config editable y tests.
 
 ## Qué extrae
 
@@ -56,6 +56,11 @@ python scraper.py -q "gimnasios" -l "Rosario" -o leads_rosario.csv
 python scraper.py -q "dentistas" -l "Buenos Aires" --log-level DEBUG --log-file scraper.log
 ```
 
+### Con configuración custom (selectores/timeouts propios)
+```bash
+python scraper.py -q "dentistas" -l "Buenos Aires" --config config/mi_config.json
+```
+
 ## Argumentos
 
 | Argumento | Alias | Default | Descripción |
@@ -67,6 +72,7 @@ python scraper.py -q "dentistas" -l "Buenos Aires" --log-level DEBUG --log-file 
 | `--show-browser` | — | `false` | Muestra el browser durante el scraping |
 | `--log-level` | — | `INFO` | Nivel de logging (DEBUG, INFO, WARNING, ERROR) |
 | `--log-file` | — | — | Archivo para guardar logs |
+| `--config` | — | `config/default.json` | Path a config JSON alternativo |
 
 El nombre del CSV se genera automáticamente si no se especifica:
 ```
@@ -97,6 +103,29 @@ resultados_{query}_{location}_{fecha}.csv
 - Mensajes de error más informativos
 - Continuación del scraping en caso de fallos parciales
 
+## ✨ Novedades en v2.1
+
+### 🔄 Retry automático con backoff exponencial
+- Si falla la extracción de un negocio (timeout, elemento no cargó), se reintenta automáticamente hasta 3 veces (configurable) antes de descartarlo
+- Espera creciente entre reintentos (1s → 2s → 4s) para no saturar la página
+- Menos leads perdidos por fallos temporales de red o carga
+
+### ⚙️ Configuración editable en JSON
+- Selectores CSS, timeouts y valores default ahora viven en `config/default.json`
+- Si Google Maps cambia sus clases CSS, se edita el JSON sin tocar código Python
+- Se puede pasar un config alternativo con `--config` (útil para ambientes o experimentos distintos)
+
+### ✅ Validación de entrada avanzada
+- `--query`/`--location`: rechaza vacíos, caracteres de control y separadores de path
+- `--output`: exige extensión `.csv` y verifica permisos de escritura en el directorio
+- `--config`: verifica que el archivo exista antes de arrancar el scraping
+- `--max`: avisa si se pide más del límite práctico de Google Maps (~120)
+
+### 🧪 Tests automatizados (pytest)
+- 37 tests cubriendo extracción de datos, validaciones del CLI, config y retry logic
+- Los tests de extracción usan mocks de Playwright — no necesitan Google Maps real ni red
+- Correr con: `pytest -v`
+
 ## Tips para agencias de Google Ads
 
 - **Sin sitio web** (`sitio_web` vacío) → prospectos que necesitan presencia digital primero
@@ -111,7 +140,8 @@ resultados_{query}_{location}_{fecha}.csv
 - ✅ El scraper respeta los tiempos de carga de Google Maps para evitar bloqueos
 - ✅ Google Maps limita los resultados a ~120 por búsqueda
 - ✅ Para más cobertura, ejecuta múltiples búsquedas con términos distintos
-- ✅ Los selectores CSS están centralizados en `src/extractors.py` para fácil mantenimiento
+- ✅ Los selectores CSS y timeouts viven en `config/default.json` para fácil mantenimiento
+- ✅ Extracción de cada negocio reintenta automáticamente ante fallos temporales
 
 ## Estructura del Proyecto
 
@@ -119,13 +149,31 @@ resultados_{query}_{location}_{fecha}.csv
 gmaps-scraper/
 ├── src/
 │   ├── __init__.py         # Exporta módulo
-│   ├── main.py             # CLI entrypoint
+│   ├── main.py             # CLI entrypoint + validaciones
 │   ├── scraper.py          # Lógica principal de scraping
 │   ├── extractors.py       # Extracción de datos (type hints)
+│   ├── retry.py            # Retry con exponential backoff
+│   ├── config.py           # Carga/validación de config JSON
 │   └── logger.py           # Setup de logging profesional
-├── scraper.py              # Wrapper para compatibilidad
-├── requirements.txt        # Dependencias
-└── README.md              # Este archivo
+├── config/
+│   └── default.json        # Selectores, timeouts, retry, defaults
+├── tests/
+│   ├── test_main.py        # Tests de validación del CLI
+│   ├── test_config.py      # Tests de carga de config
+│   ├── test_retry.py       # Tests de retry logic
+│   └── test_extractors.py  # Tests de extracción (con mocks)
+├── scraper.py               # Wrapper para compatibilidad
+├── requirements.txt         # Dependencias de producción
+├── requirements-dev.txt     # + pytest, pytest-asyncio
+├── pytest.ini                # Config de pytest
+└── README.md                # Este archivo
+```
+
+## Correr los tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
 ```
 
 ## Troubleshooting
@@ -149,12 +197,13 @@ gmaps-scraper/
 
 ## Roadmap Futuro
 
-- [ ] Retry logic con exponential backoff
+- [x] Retry logic con exponential backoff
+- [x] Configuración editable en JSON
+- [x] Tests automatizados
 - [ ] Proxy support para evitar bloqueos
 - [ ] Persistencia de estado (reanudar scraping)
 - [ ] Soporte para múltiples ubicaciones en batch
 - [ ] Docker setup
-- [ ] Tests automatizados
 
 ## Licencia
 

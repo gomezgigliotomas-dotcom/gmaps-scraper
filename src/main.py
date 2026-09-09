@@ -5,26 +5,80 @@ Google Maps Business Scraper - Entrypoint CLI
 import asyncio
 import argparse
 import re
+import os
 import logging
 from datetime import datetime
 from pathlib import Path
 
 from .scraper import scrape
 from .logger import setup_logger
+from .config import ConfigError
+
+# Caracteres de control y separadores de path que no deben aparecer en query/location
+_INVALID_CHARS_PATTERN = re.compile(r"[\x00-\x1f\x7f/\\]")
+_MAX_INPUT_LENGTH = 200
 
 
 def validate_query(query: str) -> str:
     """Valida y limpia el término de búsqueda."""
-    if not query or not query.strip():
-        raise ValueError("La búsqueda no puede estar vacía")
-    return query.strip()
+    query = query.strip()
+    if not query:
+        raise ValueError("La búsqueda (--query) no puede estar vacía")
+    if len(query) > _MAX_INPUT_LENGTH:
+        raise ValueError(f"--query es demasiado largo (máx {_MAX_INPUT_LENGTH} caracteres)")
+    if _INVALID_CHARS_PATTERN.search(query):
+        raise ValueError("--query contiene caracteres inválidos (control chars, / o \\)")
+    return query
 
 
 def validate_location(location: str) -> str:
     """Valida y limpia la ubicación."""
-    if not location or not location.strip():
-        raise ValueError("La ubicación no puede estar vacía")
-    return location.strip()
+    location = location.strip()
+    if not location:
+        raise ValueError("La ubicación (--location) no puede estar vacía")
+    if len(location) > _MAX_INPUT_LENGTH:
+        raise ValueError(f"--location es demasiado largo (máx {_MAX_INPUT_LENGTH} caracteres)")
+    if _INVALID_CHARS_PATTERN.search(location):
+        raise ValueError("--location contiene caracteres inválidos (control chars, / o \\)")
+    return location
+
+
+def validate_max_results(max_results: int, logger: logging.Logger, hard_max: int = 120) -> None:
+    """Valida el límite de resultados solicitado."""
+    if max_results < 1:
+        raise ValueError("--max debe ser mayor a 0")
+    if max_results > hard_max:
+        logger.warning(
+            f"⚠️  Google Maps limita ~{hard_max} resultados por búsqueda. "
+            f"Pediste {max_results}; es posible que no se alcancen todos. "
+            "Para más cobertura, ejecutá múltiples búsquedas con términos distintos."
+        )
+
+
+def validate_output_path(output: str) -> str:
+    """Valida que el path de salida sea un .csv en un directorio escribible."""
+    if not output:
+        return output
+
+    path = Path(output)
+
+    if path.suffix.lower() != ".csv":
+        raise ValueError(f"--output debe terminar en .csv (recibido: {output})")
+
+    parent = path.parent if str(path.parent) != "" else Path(".")
+    if parent.exists() and not os.access(parent, os.W_OK):
+        raise ValueError(f"No hay permisos de escritura en el directorio: {parent}")
+
+    return output
+
+
+def validate_config_path(config_path: str) -> str:
+    """Valida que el archivo de config exista, si se especificó uno custom."""
+    if not config_path:
+        return config_path
+    if not Path(config_path).exists():
+        raise ValueError(f"Archivo de configuración no encontrado: {config_path}")
+    return config_path
 
 
 def generate_output_filename(query: str, location: str) -> str:
@@ -83,6 +137,11 @@ def main() -> None:
         default="",
         help="Guardar logs en archivo (ej: scraper.log)",
     )
+    parser.add_argument(
+        "--config",
+        default="",
+        help="Path a config JSON alternativo (default: config/default.json)",
+    )
 
     args = parser.parse_args()
 
@@ -102,17 +161,12 @@ def main() -> None:
         # Validar inputs
         query = validate_query(args.query)
         location = validate_location(args.location)
-
-        if args.max < 1:
-            raise ValueError("--max debe ser mayor a 0")
-        if args.max > 120:
-            logger.warning(
-                "⚠️  Google Maps limita ~120 resultados por búsqueda. "
-                "Para más cobertura, ejecuta múltiples búsquedas."
-            )
+        validate_max_results(args.max, logger)
+        output = validate_output_path(args.output)
+        config_path = validate_config_path(args.config)
 
         # Generar nombre de archivo si no se especifica
-        output_file = args.output or generate_output_filename(query, location)
+        output_file = output or generate_output_filename(query, location)
 
         logger.info(f"📝 Búsqueda: {query}")
         logger.info(f"📍 Ubicación: {location}")
@@ -128,6 +182,7 @@ def main() -> None:
                 max_results=args.max,
                 output_file=output_file,
                 headless=headless,
+                config_path=config_path,
             )
         )
 
@@ -138,7 +193,7 @@ def main() -> None:
         else:
             logger.warning("⚠️  No se extrajeron resultados")
 
-    except ValueError as e:
+    except (ValueError, ConfigError) as e:
         logger.error(f"❌ Error de validación: {e}")
         exit(1)
     except KeyboardInterrupt:
