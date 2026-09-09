@@ -14,6 +14,7 @@ from playwright.async_api import Page
 from .extractors import extract_business_data, FIELDNAMES
 from .retry import retry_async
 from .config import load_config
+from .state import get_state_path, load_state, save_state, clear_state
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ async def scrape(
     headless: bool,
     config_path: str = "",
     proxy: Optional[Dict[str, str]] = None,
+    resume: bool = False,
 ) -> List[Dict[str, str]]:
     """
     Realiza el scraping de negocios en Google Maps.
@@ -125,6 +127,8 @@ async def scrape(
         proxy: Dict en formato Playwright ({"server": ..., "username": ...,
                "password": ...}) para rutear el tráfico a través de un
                proxy y evitar bloqueos por IP. Ver src/proxy.py.
+        resume: Si True, retoma un scraping previo interrumpido para la
+                misma query/location/max_results (ver src/state.py)
 
     Returns:
         Lista de diccionarios con datos de negocios
@@ -136,10 +140,20 @@ async def scrape(
     defaults = config["defaults"]
 
     search_term = f"{query} en {location}"
-    results: List[Dict[str, str]] = []
+
+    state_path = get_state_path(query, location, max_results)
+    previous_state = load_state(state_path) if resume else None
+
+    results: List[Dict[str, str]] = list(previous_state["results"]) if previous_state else []
+    already_processed = previous_state["processed_count"] if previous_state else 0
 
     logger.info(f"Iniciando scraping: {search_term}")
     logger.info(f"Máximo de resultados: {max_results}")
+    if already_processed:
+        logger.info(
+            f"▶️  Retomando desde el item {already_processed + 1} "
+            f"({len(results)} resultados ya guardados)"
+        )
 
     async with async_playwright() as p:
         try:
@@ -182,7 +196,7 @@ async def scrape(
             except PlaywrightTimeout:
                 logger.error("Timeout esperando resultados. La búsqueda puede no ser válida.")
                 await browser.close()
-                return []
+                return results
 
             # Scrollear para cargar más resultados
             await scroll_results(page, max_results, selectors, timeouts)
@@ -192,8 +206,11 @@ async def scrape(
             total = min(len(items), max_results)
             logger.info(f"Encontrados {len(items)} negocios. Extrayendo {total}...")
 
-            # Extraer datos de cada item (con retry ante fallos temporales)
+            # Extraer datos de cada item (con retry ante fallos temporales).
+            # Si retomamos una corrida previa, saltamos los items ya procesados.
             for i, item in enumerate(items[:max_results]):
+                if i < already_processed:
+                    continue
                 try:
                     data = await _extract_item_with_retry(
                         page, item, selectors, timeouts, retry_cfg
@@ -210,13 +227,20 @@ async def scrape(
                         exc_info=False,
                     )
                     continue
+                finally:
+                    # Guardar progreso incremental: si el proceso se corta acá,
+                    # --resume puede retomar desde el próximo item.
+                    save_state(
+                        state_path, query, location, max_results,
+                        output_file, results, i + 1,
+                    )
 
             await browser.close()
             logger.info("Navegador cerrado")
 
         except Exception as e:
             logger.error(f"Error fatal durante el scraping: {e}", exc_info=True)
-            return []
+            return results
 
     # Guardar resultados
     if not results:
@@ -239,6 +263,9 @@ async def scrape(
             f"✅ CSV guardado | Total: {len(results)} | "
             f"Con web: {con_web} | Sin web: {sin_web}"
         )
+
+        # Scraping completado con éxito: el estado intermedio ya no hace falta
+        clear_state(state_path)
 
     except Exception as e:
         logger.error(f"Error guardando CSV: {e}", exc_info=True)

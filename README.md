@@ -2,7 +2,7 @@
 
 Scraper profesional de Google Maps para encontrar negocios potenciales para una agencia de Google Ads. Exporta los datos a CSV listo para importar en Google Sheets.
 
-**Versión 2.2** ✨ - Logging profesional, type hints, retry automático, config editable, tests y soporte de proxies.
+**Versión 2.3** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
 
 ## Qué extrae
 
@@ -75,20 +75,44 @@ cp proxies.example.txt proxies.txt
 python scraper.py -q "dentistas" -l "Buenos Aires" --proxy-file proxies.txt
 ```
 
+### Retomar un scraping interrumpido
+```bash
+# Si se cortó a mitad de camino (Ctrl+C, error, bloqueo), volvé a correr
+# el mismo comando agregando --resume: continúa desde donde quedó
+python scraper.py -q "dentistas" -l "Buenos Aires" -m 100 --resume
+```
+
+### Múltiples búsquedas en batch
+```bash
+# 1. Copiá el archivo de ejemplo y armá tu lista de búsquedas
+cp batch.example.csv batch.csv
+
+# 2. Corré el batch — genera un CSV por búsqueda
+python scraper.py --batch-file batch.csv
+
+# 3. (Opcional) Combiná todos los CSVs del batch en uno solo
+python scraper.py --batch-file batch.csv --combine-output leads_todos.csv
+```
+
 ## Argumentos
 
 | Argumento | Alias | Default | Descripción |
 |-----------|-------|---------|-------------|
-| `--query` | `-q` | requerido | Rubro o término a buscar |
-| `--location` | `-l` | requerido | Ciudad o zona |
-| `--max` | `-m` | `50` | Máximo de resultados |
-| `--output` | `-o` | auto | Nombre del archivo CSV de salida |
+| `--query` | `-q` | requerido* | Rubro o término a buscar |
+| `--location` | `-l` | requerido* | Ciudad o zona |
+| `--max` | `-m` | `50` | Máximo de resultados por búsqueda |
+| `--output` | `-o` | auto | Nombre del archivo CSV de salida (no aplica con `--batch-file`) |
 | `--show-browser` | — | `false` | Muestra el browser durante el scraping |
 | `--log-level` | — | `INFO` | Nivel de logging (DEBUG, INFO, WARNING, ERROR) |
 | `--log-file` | — | — | Archivo para guardar logs |
 | `--config` | — | `config/default.json` | Path a config JSON alternativo |
 | `--proxy` | — | — | Proxy fijo (ej: `http://user:pass@host:port`) |
 | `--proxy-file` | — | — | Archivo con lista de proxies; rota al azar en cada corrida |
+| `--resume` | — | `false` | Retoma un scraping interrumpido en vez de arrancar de cero |
+| `--batch-file` | — | — | CSV con múltiples búsquedas (columnas: `query,location,max`) |
+| `--combine-output` | — | — | Con `--batch-file`: combina todos los CSVs en uno solo |
+
+\* `--query`/`--location` son requeridos salvo que uses `--batch-file`
 
 El nombre del CSV se genera automáticamente si no se especifica:
 ```
@@ -171,6 +195,58 @@ socks5://host:port
 - Volumen bajo/ocasional (prospección manual para tu propia agencia) → probablemente no lo necesites, `--show-browser` alcanza para resolver algún CAPTCHA ocasional
 - Volumen alto o corridas automatizadas frecuentes → **recomendado**, evita que tu IP quede bloqueada
 
+## ✨ Novedades en v2.3
+
+### ⏯️ Resume (retomar scraping interrumpido)
+
+Si el scraper se corta a mitad de camino (Ctrl+C, un error, Google bloqueando), no hace falta arrancar de cero.
+
+- Cada búsqueda (`query` + `location` + `max`) guarda su progreso incrementalmente en `.gmaps_state/`
+- Volvé a correr el mismo comando agregando `--resume`: continúa desde el último negocio procesado
+- Al completarse exitosamente, el estado se borra automáticamente
+- `.gmaps_state/` está en `.gitignore`
+
+```bash
+python scraper.py -q "dentistas" -l "Buenos Aires" -m 100
+# ...se corta a mitad de camino...
+python scraper.py -q "dentistas" -l "Buenos Aires" -m 100 --resume
+# retoma desde donde quedó, no repite negocios ya extraídos
+```
+
+### 📦 Batch (múltiples búsquedas en una corrida)
+
+Para prospectar varios rubros/ciudades sin ejecutar el comando uno por uno:
+
+- `--batch-file batch.csv` — CSV con columnas `query,location,max` (la columna `max` es opcional por fila)
+- Cada búsqueda genera su propio CSV con nombre automático
+- `--combine-output leads_todos.csv` — además, combina todos los resultados en un único CSV
+- `--resume` también funciona en modo batch: si se corta a mitad del batch, retoma la búsqueda que quedó a medias
+
+```csv
+query,location,max
+dentistas,Buenos Aires,50
+abogados,Córdoba,30
+restaurantes,"Palermo, Buenos Aires",100
+```
+
+### 🐳 Docker
+
+El proyecto incluye `Dockerfile` y `docker-compose.yml` basados en la imagen oficial de Playwright (con Chromium ya instalado), para no depender de tener Python/Playwright configurados localmente.
+
+```bash
+# Build
+docker build -t gmaps-scraper .
+
+# Correr una búsqueda (resultados quedan en ./output)
+docker run --rm -v "$(pwd)/output:/app/output" gmaps-scraper \
+  --query "dentistas" --location "Buenos Aires" --max 50 --output /app/output/resultados.csv
+
+# O con docker compose (editá el `command` en docker-compose.yml)
+docker compose run --rm scraper --query "dentistas" --location "Buenos Aires" -o /app/output/resultados.csv
+```
+
+> **Nota:** no se puede correr con `--show-browser` dentro del contenedor (no hay entorno gráfico) — usá esa opción solo para debugging local.
+
 ## Tips para agencias de Google Ads
 
 - **Sin sitio web** (`sitio_web` vacío) → prospectos que necesitan presencia digital primero
@@ -188,6 +264,7 @@ socks5://host:port
 - ✅ Para más cobertura, ejecuta múltiples búsquedas con términos distintos
 - ✅ Los selectores CSS y timeouts viven en `config/default.json` para fácil mantenimiento
 - ✅ Extracción de cada negocio reintenta automáticamente ante fallos temporales
+- ✅ El progreso se guarda incrementalmente — un corte a mitad de camino no pierde lo ya extraído
 
 ## Estructura del Proyecto
 
@@ -195,12 +272,14 @@ socks5://host:port
 gmaps-scraper/
 ├── src/
 │   ├── __init__.py         # Exporta módulo
-│   ├── main.py             # CLI entrypoint + validaciones
+│   ├── main.py             # CLI entrypoint + validaciones + orquestación batch
 │   ├── scraper.py          # Lógica principal de scraping
 │   ├── extractors.py       # Extracción de datos (type hints)
 │   ├── retry.py            # Retry con exponential backoff
 │   ├── config.py           # Carga/validación de config JSON
 │   ├── proxy.py            # Parseo y rotación de proxies
+│   ├── state.py            # Persistencia de estado (--resume)
+│   ├── batch.py            # Carga y ejecución de --batch-file
 │   └── logger.py           # Setup de logging profesional
 ├── config/
 │   └── default.json        # Selectores, timeouts, retry, defaults
@@ -209,8 +288,14 @@ gmaps-scraper/
 │   ├── test_config.py      # Tests de carga de config
 │   ├── test_retry.py       # Tests de retry logic
 │   ├── test_proxy.py       # Tests de parseo/rotación de proxies
+│   ├── test_state.py       # Tests de persistencia/resume
+│   ├── test_batch.py       # Tests de carga/combinación de batch
 │   └── test_extractors.py  # Tests de extracción (con mocks)
 ├── proxies.example.txt      # Plantilla para lista de proxies
+├── batch.example.csv        # Plantilla para múltiples búsquedas
+├── Dockerfile                # Imagen basada en Playwright oficial
+├── docker-compose.yml        # Atajo para correr con volúmenes montados
+├── .dockerignore
 ├── scraper.py               # Wrapper para compatibilidad
 ├── requirements.txt         # Dependencias de producción
 ├── requirements-dev.txt     # + pytest, pytest-asyncio
@@ -250,15 +335,23 @@ pytest -v
 - Abre un issue en GitHub si los selectores dejan de funcionar
 - Puedes debuggear con `--log-level DEBUG`
 
+### El scraping se cortó a mitad de camino
+- Volvé a correr el mismo comando (misma query/location/max) agregando `--resume`
+- Si el resultado sigue siendo incompleto, revisá `.gmaps_state/` — puede que el archivo de estado se haya corrompido; borralo y arrancá de cero
+
+### Docker: "unable to connect to display" o similar con --show-browser
+- El contenedor no tiene entorno gráfico; no uses `--show-browser` dentro de Docker
+- Para resolver CAPTCHAs manualmente, corré el scraper localmente (fuera de Docker) esa vez puntual
+
 ## Roadmap Futuro
 
 - [x] Retry logic con exponential backoff
 - [x] Configuración editable en JSON
 - [x] Tests automatizados
 - [x] Proxy support para evitar bloqueos
-- [ ] Persistencia de estado (reanudar scraping)
-- [ ] Soporte para múltiples ubicaciones en batch
-- [ ] Docker setup
+- [x] Persistencia de estado (reanudar scraping)
+- [x] Soporte para múltiples ubicaciones en batch
+- [x] Docker setup
 
 ## Licencia
 

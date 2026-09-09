@@ -9,11 +9,19 @@ import os
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 from .scraper import scrape
 from .logger import setup_logger
 from .config import ConfigError
 from .proxy import select_proxy, ProxyError
+from .batch import (
+    load_batch_file,
+    generate_batch_output_filename,
+    combine_csv_files,
+    BatchError,
+)
+from .extractors import FIELDNAMES
 
 # Caracteres de control y separadores de path que no deben aparecer en query/location
 _INVALID_CHARS_PATTERN = re.compile(r"[\x00-\x1f\x7f/\\]")
@@ -90,8 +98,7 @@ def generate_output_filename(query: str, location: str) -> str:
     return f"resultados_{safe_query}_{safe_location}_{timestamp}.csv"
 
 
-def main() -> None:
-    """Función principal - CLI entrypoint."""
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="🔍 Google Maps Business Scraper para agencias de Google Ads",
         epilog="Ejemplo: python -m src.main --query 'dentistas' --location 'Buenos Aires' --max 50",
@@ -100,27 +107,27 @@ def main() -> None:
     parser.add_argument(
         "--query",
         "-q",
-        required=True,
-        help='Término a buscar (ej: "dentistas", "restaurantes")',
+        default="",
+        help='Término a buscar (ej: "dentistas", "restaurantes"). Requerido salvo con --batch-file',
     )
     parser.add_argument(
         "--location",
         "-l",
-        required=True,
-        help='Ubicación (ej: "Buenos Aires", "Palermo, Buenos Aires")',
+        default="",
+        help='Ubicación (ej: "Buenos Aires", "Palermo, Buenos Aires"). Requerido salvo con --batch-file',
     )
     parser.add_argument(
         "--max",
         "-m",
         type=int,
         default=50,
-        help="Máximo de resultados (default: 50, máx recomendado: 120)",
+        help="Máximo de resultados por búsqueda (default: 50, máx recomendado: 120)",
     )
     parser.add_argument(
         "--output",
         "-o",
         default="",
-        help="Archivo de salida CSV (default: auto-generado)",
+        help="Archivo de salida CSV (default: auto-generado). No aplica con --batch-file",
     )
     parser.add_argument(
         "--show-browser",
@@ -160,7 +167,114 @@ def main() -> None:
             "al azar en cada corrida. Mutuamente excluyente con --proxy."
         ),
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Retoma un scraping interrumpido para la misma búsqueda "
+            "(query + location + max) en vez de arrancar de cero"
+        ),
+    )
+    parser.add_argument(
+        "--batch-file",
+        default="",
+        help=(
+            "CSV con múltiples búsquedas a correr en secuencia. "
+            "Columnas: query,location,max (max opcional por fila)"
+        ),
+    )
+    parser.add_argument(
+        "--combine-output",
+        default="",
+        help=(
+            "Con --batch-file: combina todos los CSVs individuales en uno solo "
+            "en el path indicado (ej: leads_combinados.csv)"
+        ),
+    )
 
+    return parser
+
+
+async def run_single_search(
+    query: str,
+    location: str,
+    max_results: int,
+    output_file: str,
+    headless: bool,
+    config_path: str,
+    proxy: Optional[dict],
+    resume: bool,
+    logger: logging.Logger,
+) -> List[dict]:
+    """Ejecuta una búsqueda individual y retorna sus resultados."""
+    logger.info(f"📝 Búsqueda: {query}")
+    logger.info(f"📍 Ubicación: {location}")
+    logger.info(f"📊 Máximo de resultados: {max_results}")
+    logger.info(f"💾 Archivo de salida: {output_file}")
+
+    return await scrape(
+        query=query,
+        location=location,
+        max_results=max_results,
+        output_file=output_file,
+        headless=headless,
+        config_path=config_path,
+        proxy=proxy,
+        resume=resume,
+    )
+
+
+async def run_batch(
+    batch_file: str,
+    default_max: int,
+    headless: bool,
+    config_path: str,
+    proxy: Optional[dict],
+    resume: bool,
+    combine_output: str,
+    logger: logging.Logger,
+) -> None:
+    """Ejecuta todas las búsquedas de un archivo de batch, en secuencia."""
+    searches = load_batch_file(batch_file, default_max)
+
+    output_files: List[str] = []
+    total_results = 0
+
+    for idx, search in enumerate(searches, start=1):
+        logger.info("=" * 60)
+        logger.info(f"🔄 Búsqueda {idx}/{len(searches)} del batch")
+        logger.info("=" * 60)
+
+        query = validate_query(search["query"])
+        location = validate_location(search["location"])
+        max_results = search["max"]
+        output_file = generate_batch_output_filename(query, location)
+
+        results = await run_single_search(
+            query, location, max_results, output_file,
+            headless, config_path, proxy, resume, logger,
+        )
+
+        if results:
+            output_files.append(output_file)
+            total_results += len(results)
+        else:
+            logger.warning(f"⚠️  Búsqueda {idx}/{len(searches)} no produjo resultados")
+
+    logger.info("=" * 60)
+    logger.info(
+        f"✅ Batch completado: {len(output_files)}/{len(searches)} búsquedas "
+        f"con resultados | {total_results} negocios en total"
+    )
+    logger.info("=" * 60)
+
+    if combine_output and output_files:
+        combine_csv_files(output_files, combine_output, FIELDNAMES)
+
+
+def main() -> None:
+    """Función principal - CLI entrypoint."""
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     # Configurar logging
@@ -176,38 +290,49 @@ def main() -> None:
     logger.info("=" * 60)
 
     try:
-        # Validar inputs
-        query = validate_query(args.query)
-        location = validate_location(args.location)
         validate_max_results(args.max, logger)
-        output = validate_output_path(args.output)
         config_path = validate_config_path(args.config)
         proxy = select_proxy(
             proxy=args.proxy or None,
             proxy_file=args.proxy_file or None,
         )
+        headless = not args.show_browser
 
-        # Generar nombre de archivo si no se especifica
-        output_file = output or generate_output_filename(query, location)
-
-        logger.info(f"📝 Búsqueda: {query}")
-        logger.info(f"📍 Ubicación: {location}")
-        logger.info(f"📊 Máximo de resultados: {args.max}")
-        logger.info(f"💾 Archivo de salida: {output_file}")
         if not proxy:
             logger.info("🌐 Sin proxy — conexión directa (mayor riesgo de bloqueo/CAPTCHA)")
 
-        # Ejecutar scraping
-        headless = not args.show_browser
+        if args.batch_file:
+            if args.output:
+                logger.warning("⚠️  --output se ignora en modo batch (se genera un CSV por búsqueda)")
+            asyncio.run(
+                run_batch(
+                    batch_file=args.batch_file,
+                    default_max=args.max,
+                    headless=headless,
+                    config_path=config_path,
+                    proxy=proxy,
+                    resume=args.resume,
+                    combine_output=args.combine_output,
+                    logger=logger,
+                )
+            )
+            return
+
+        # Modo búsqueda individual
+        if not args.query or not args.location:
+            raise ValueError(
+                "--query y --location son requeridos (o usá --batch-file para múltiples búsquedas)"
+            )
+
+        query = validate_query(args.query)
+        location = validate_location(args.location)
+        output = validate_output_path(args.output)
+        output_file = output or generate_output_filename(query, location)
+
         results = asyncio.run(
-            scrape(
-                query=query,
-                location=location,
-                max_results=args.max,
-                output_file=output_file,
-                headless=headless,
-                config_path=config_path,
-                proxy=proxy,
+            run_single_search(
+                query, location, args.max, output_file,
+                headless, config_path, proxy, args.resume, logger,
             )
         )
 
@@ -218,7 +343,7 @@ def main() -> None:
         else:
             logger.warning("⚠️  No se extrajeron resultados")
 
-    except (ValueError, ConfigError, ProxyError) as e:
+    except (ValueError, ConfigError, ProxyError, BatchError) as e:
         logger.error(f"❌ Error de validación: {e}")
         exit(1)
     except KeyboardInterrupt:

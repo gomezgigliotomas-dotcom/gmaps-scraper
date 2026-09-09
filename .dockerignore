@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.pytest_cache/
+.gmaps_state/
+*.csv
+*.log
+proxies.txt
+tests/
+README.md
+requirements-dev.txt
+pytest.ini
