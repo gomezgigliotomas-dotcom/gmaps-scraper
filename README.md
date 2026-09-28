@@ -2,7 +2,7 @@
 
 Scraper profesional de Google Maps para encontrar negocios potenciales para una agencia de Google Ads. Exporta los datos a CSV listo para importar en Google Sheets.
 
-**Versión 2.3.2** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
+**Versión 2.3.3** ✨ - Logging profesional, retry automático, proxies, resume, batch de búsquedas y Docker.
 
 ## Qué extrae
 
@@ -264,6 +264,14 @@ Probé el `docker build` + `docker run` + `docker compose run` de punta a punta 
 **Fix:** `playwright==1.62.0` fijado en `requirements.txt`, coincidiendo exactamente con el tag de la imagen base (`v1.62.0-jammy`) en el `Dockerfile`. Si en el futuro actualizás una versión, hay que actualizar la otra — queda documentado con un comentario en ambos archivos.
 
 Verificado con una búsqueda real dentro del contenedor (`docker run` y `docker compose run`), con el volumen de `output/` accesible desde el host.
+
+### v2.3.3 — Fix de búsquedas con un solo resultado
+
+Corriendo el scraper en zonas chicas (municipios pequeños, rubros muy específicos) apareció otro caso real: cuando **muy pocos negocios matchean la búsqueda — a veces uno solo** — Google Maps no muestra la lista con panel de resultados (`div[role="feed"]`). En cambio, **redirige directo al panel de detalle de ese único negocio**. El scraper esperaba siempre el feed, así que reportaba "timeout esperando resultados" y descartaba la búsqueda entera, aunque sí existía un negocio real.
+
+**Fix:** si el feed no aparece, el scraper ahora comprueba si en cambio se abrió el detalle de un resultado único (el nombre del negocio ya visible) y lo extrae directo, sin necesitar lista ni scroll.
+
+Verificado en vivo: `concesionarias de autos usados` en Trujillo Alto, PR devolvía timeout antes del fix — con el fix, extrae correctamente el único concesionario que hay en la zona.
 
 ## Tips para agencias de Google Ads
 

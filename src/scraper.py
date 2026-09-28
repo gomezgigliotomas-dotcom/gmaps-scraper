@@ -24,6 +24,34 @@ def _dedup_key(data: Dict[str, str]) -> tuple:
     return (data.get("nombre", "").strip().lower(), data.get("direccion", "").strip().lower())
 
 
+async def _try_extract_single_result(
+    page: Page, selectors: Dict[str, str], timeouts: Dict[str, int]
+) -> Optional[Dict[str, str]]:
+    """
+    Cuando muy pocos negocios matchean la búsqueda (a veces uno solo),
+    Google Maps no muestra la lista con feed — redirige directo al panel
+    de detalle de ese único resultado. div[role="feed"] nunca aparece, así
+    que scrape() normalmente reportaría timeout sin extraer nada.
+
+    Se detecta comprobando si el nombre del negocio (h1) está presente:
+    si es así, el detalle ya está abierto y se puede extraer directo, sin
+    necesidad de scroll ni click.
+
+    Returns:
+        Los datos del negocio si se detectó este caso, None si no
+        (búsqueda realmente sin resultados o timeout genuino).
+    """
+    try:
+        await page.wait_for_selector(
+            selectors["business_name"], timeout=timeouts["detail_panel_ms"]
+        )
+    except PlaywrightTimeout:
+        return None
+
+    data = await extract_business_data(page, selectors)
+    return data if data["nombre"] else None
+
+
 async def scroll_results(page: Page, max_results: int, selectors: Dict[str, str], timeouts: Dict[str, int]) -> None:
     """
     Scrollea la lista de resultados para cargar más items.
@@ -205,59 +233,78 @@ async def scrape(
 
             # Esperar a que carguen los resultados
             logger.info("Esperando carga de resultados...")
+            has_result_list = True
             try:
                 await page.wait_for_selector(
                     selectors["results_list"], timeout=timeouts["results_panel_ms"]
                 )
             except PlaywrightTimeout:
-                logger.error("Timeout esperando resultados. La búsqueda puede no ser válida.")
-                await browser.close()
-                return results
+                has_result_list = False
 
-            # Scrollear para cargar más resultados
-            await scroll_results(page, max_results, selectors, timeouts)
-
-            # Obtener items cargados
-            items = await page.query_selector_all(selectors["result_item"])
-            total = min(len(items), max_results)
-            logger.info(f"Encontrados {len(items)} negocios. Extrayendo {total}...")
-
-            # Extraer datos de cada item (con retry ante fallos temporales).
-            # Si retomamos una corrida previa, saltamos los items ya procesados.
-            for i, item in enumerate(items[:max_results]):
-                if i < already_processed:
-                    continue
-                try:
-                    data = await _extract_item_with_retry(
-                        page, item, selectors, timeouts, retry_cfg
-                    )
-                    key = _dedup_key(data)
-                    if key in seen_keys:
-                        logger.debug(
-                            f"[{i+1}/{total}] Duplicado (ya extraído en una corrida "
-                            f"previa de --resume), se omite: {data['nombre']}"
-                        )
-                    else:
-                        seen_keys.add(key)
-                        results.append(data)
-                        has_website = "🌐" if data["sitio_web"] else "📵"
+            if not has_result_list:
+                # Cuando muy pocos negocios matchean la búsqueda (a veces
+                # uno solo), Google Maps no muestra la lista con feed —
+                # redirige directo al panel de detalle de ese resultado
+                # único. Se detecta y extrae igual en vez de reportar error.
+                single_result = await _try_extract_single_result(page, selectors, timeouts)
+                if single_result and not already_processed:
+                    key = _dedup_key(single_result)
+                    if key not in seen_keys:
+                        results.append(single_result)
                         logger.info(
-                            f"[{i+1}/{total}] {has_website} {data['nombre']} "
-                            f"— {data['categoria']}"
+                            f"📍 Un solo negocio coincide con la búsqueda (Google Maps "
+                            f"lo abrió directo, sin lista): {single_result['nombre']} "
+                            f"— {single_result['categoria']}"
                         )
-                except Exception as e:
+                elif not single_result:
                     logger.error(
-                        f"[{i+1}/{total}] Descartado tras reintentos: {e}",
-                        exc_info=False,
+                        "Timeout esperando resultados. La búsqueda puede no ser válida."
                     )
-                    continue
-                finally:
-                    # Guardar progreso incremental: si el proceso se corta acá,
-                    # --resume puede retomar desde el próximo item.
-                    save_state(
-                        state_path, query, location, max_results,
-                        output_file, results, i + 1,
-                    )
+            else:
+                # Scrollear para cargar más resultados
+                await scroll_results(page, max_results, selectors, timeouts)
+
+                # Obtener items cargados
+                items = await page.query_selector_all(selectors["result_item"])
+                total = min(len(items), max_results)
+                logger.info(f"Encontrados {len(items)} negocios. Extrayendo {total}...")
+
+                # Extraer datos de cada item (con retry ante fallos temporales).
+                # Si retomamos una corrida previa, saltamos los items ya procesados.
+                for i, item in enumerate(items[:max_results]):
+                    if i < already_processed:
+                        continue
+                    try:
+                        data = await _extract_item_with_retry(
+                            page, item, selectors, timeouts, retry_cfg
+                        )
+                        key = _dedup_key(data)
+                        if key in seen_keys:
+                            logger.debug(
+                                f"[{i+1}/{total}] Duplicado (ya extraído en una corrida "
+                                f"previa de --resume), se omite: {data['nombre']}"
+                            )
+                        else:
+                            seen_keys.add(key)
+                            results.append(data)
+                            has_website = "🌐" if data["sitio_web"] else "📵"
+                            logger.info(
+                                f"[{i+1}/{total}] {has_website} {data['nombre']} "
+                                f"— {data['categoria']}"
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"[{i+1}/{total}] Descartado tras reintentos: {e}",
+                            exc_info=False,
+                        )
+                        continue
+                    finally:
+                        # Guardar progreso incremental: si el proceso se corta acá,
+                        # --resume puede retomar desde el próximo item.
+                        save_state(
+                            state_path, query, location, max_results,
+                            output_file, results, i + 1,
+                        )
 
             await browser.close()
             logger.info("Navegador cerrado")
