@@ -8,6 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+# Nombre del paquete ("src"). Todos los módulos internos usan
+# logging.getLogger(__name__), que resuelve a "src.scraper", "src.retry",
+# etc. — al configurar el logger con ESTE nombre como raíz, esos loggers
+# heredan sus handlers automáticamente por la jerarquía de logging de
+# Python (en vez de caer al root logger, sin handlers, y perderse).
+PACKAGE_LOGGER_NAME = __package__ or "src"
+
 
 def setup_logger(
     name: str,

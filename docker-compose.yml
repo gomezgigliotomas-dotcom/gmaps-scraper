@@ -1,0 +1,20 @@
+services:
+  scraper:
+    build: .
+    volumes:
+      # Los resultados quedan en ./output en tu máquina
+      - ./output:/app/output
+      # Config editable sin rebuildear la imagen
+      - ./config:/app/config
+      # Estado de --resume persiste entre corridas del contenedor
+      - ./.gmaps_state:/app/.gmaps_state
+    # Ejemplo de comando — sobreescribí con `docker compose run scraper <args>`
+    command:
+      - "--query"
+      - "dentistas"
+      - "--location"
+      - "Buenos Aires"
+      - "--max"
+      - "50"
+      - "--output"
+      - "/app/output/resultados.csv"

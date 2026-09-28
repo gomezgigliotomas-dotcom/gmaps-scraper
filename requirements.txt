@@ -1,2 +1,8 @@
 # Dependencias de producción
-playwright>=1.40.0
+#
+# Version fijada (no ">=") a proposito: el paquete de Python y el binario
+# de Chromium deben coincidir exactamente. La imagen Docker (ver Dockerfile)
+# trae Chromium preinstalado para ESTA version puntual — si se sube esta
+# version, hay que subir tambien el tag de la imagen base en el Dockerfile,
+# o el build funciona pero el contenedor falla al lanzar el browser.
+playwright==1.62.0

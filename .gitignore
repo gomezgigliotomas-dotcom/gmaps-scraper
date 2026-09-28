@@ -1,5 +1,6 @@
 credentials.json
 *.csv
+!batch.example.csv
 __pycache__/
 *.pyc
 .env
@@ -7,3 +8,4 @@ __pycache__/
 .pytest_cache/
 *.log
 proxies.txt
+.gmaps_state/
